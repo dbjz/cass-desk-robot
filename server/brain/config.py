@@ -18,9 +18,9 @@ if _ENV_FILE.is_file():
             os.environ.setdefault(_k.strip(), _v)
 
 # The robot's name — the wake word is "hey <name>".
-ROBOT_NAME = "Rocky"
+ROBOT_NAME = "Cass"
 
-# Your name — Rocky calls you this. Set HUMAN_NAME in server/.env so it
+# Your name — Cass calls you this. Set HUMAN_NAME in server/.env so it
 # stays out of the repo; "friend" until you do.
 HUMAN_NAME = os.environ.get("HUMAN_NAME", "friend")
 
@@ -67,13 +67,13 @@ PORT = 8765
 #                 Lifts a muffled voice; too much sounds thin and hissy.
 # The console page has sliders for level / bass cut / presence that apply
 # live; set the winners here to keep them.
-TTS_VOICE_ID = "6dd07916890445e59c5f019ad0fc7879"
+TTS_VOICE_ID = "79c3f98da24a4c9299777420d0222aed"
 TTS_TEMPERATURE = 0.4
 TTS_TOP_P = 0.6
-REPLY_MAX_SENTENCES = 3
+REPLY_MAX_SENTENCES = 4
 TTS_LEVEL = 0.12
-TTS_HIGHPASS_HZ = 0.0
-TTS_PRESENCE_DB = 0.0
+TTS_HIGHPASS_HZ = 290.0
+TTS_PRESENCE_DB = 3.0
 
 # Text-to-speech. The voice comes from Fish Audio (TTS_VOICE_ID above).
 TTS_FALLBACK_VOICE = "Fred"  # built-in voice used until Fish Audio is set up: a macOS `say`
@@ -98,12 +98,13 @@ DEBUG_TTS_CHECK = False
 # Listening. The robot's mic when it is connected, the computer's otherwise.
 LISTEN_ON_START = True
 WAKE_PHRASES = [  # what speech-to-text tends to hear for "hey Rocky"
-    "hey rocky",
-    "hey rocket",
-    "hey rocking",
-    "hi rocky",
-    "a rocky",
-    "hey ricky",
+    "hey cass",
+    "hey cas",
+    "hey cast",
+    "hey caste",
+    "hi cass",
+    "hi cas",
+    "a cass",
 ]
 STT_MODEL = "base.en"    # faster-whisper model: base.en ~0.3 s per utterance on an Apple
                          # Silicon Mac, small.en hears a little better but takes ~1 s
@@ -164,7 +165,7 @@ EMOTIONS = [
 # is at http://localhost:<LIVE_VIEW_PORT>/ on this computer.
 CAMERA_FPS = 10
 LIVE_VIEW_PORT = 8766
-LIVE_VIEW_BIND = "127.0.0.1"  # this computer only. "0.0.0.0" would show the camera to the whole LAN.
+LIVE_VIEW_BIND = "0.0.0.0"  # this computer only. "0.0.0.0" would show the camera to the whole LAN.
 SEND_CAMERA_TO_BRAIN = True  # let Rocky see the camera when a question is about seeing
 # A frame is attached only when the question is about seeing (any of these
 # words or phrases). Everyday words like "this", "that", "here", "there" and

@@ -19,6 +19,7 @@ import json
 import os
 import re
 import threading
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
@@ -40,15 +41,21 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "look",
-            "description": (
-                "Move your head to look somewhere. Use it whenever you are asked to "
-                "look left/right/down/up/around, or need to see something outside "
-                "the current picture. Always call it when asked, even if you think "
-                "you are already there: the result tells you where your head really "
-                "is and whether it is at a limit. You get a fresh camera image "
-                "afterwards; describe only what that image shows. Up is as high as "
-                "'level': your neck cannot tilt above eye level."
-            ),
+	    "description": (
+  	        "Physically move your head and return a fresh camera image. "
+    		"Call this when the user explicitly asks you to look, turn, inspect, "
+    		"check visually, or describe something that requires a new camera view. "
+    		"You may also call it when the answer genuinely requires visual information "
+    		"that is not present in the current image. "
+    		"Do NOT call this merely because the user mentions a physical object, room, "
+    		"light, device, or event. Do NOT use it to investigate something that happened "
+    		"in the past and cannot be verified by the current camera view. "
+    		"If you can answer the question without new visual information, do not call it. "
+    		"When explicitly asked to look in a direction, always call it even if you "
+    		"believe your head is already there. The result reports the actual head position "
+    		"and provides a fresh image. Up is limited to level; the neck cannot tilt "
+    		"above eye level."
+	    ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -161,8 +168,16 @@ class RobotBrain:
             error = ("Brain cannot reach internet. Bad bad bad.", "sad")
         except openai.AuthenticationError:
             error = ("Brain has no key. Set LLM_API_KEY, human.", "sad")
+        #except openai.APIStatusError as e:
+        #   error = (f"Ow. Brain hurts. API error {e.status_code}.", "sad")
         except openai.APIStatusError as e:
+            print("\n=== LLM API ERROR ===")
+            print(f"status: {e.status_code}")
+            print(f"message: {e}")
+            print(f"response: {getattr(e, 'response', None)}")
+            print("=====================\n")
             error = (f"Ow. Brain hurts. API error {e.status_code}.", "sad")
+
         finally:
             gen.close()
 
@@ -199,23 +214,41 @@ class RobotBrain:
         Yields sentences as they complete."""
         nudged = False
         limit = config.REPLY_MAX_SENTENCES
+        tool_used = False
+
         for _ in range(5):
             if cancelled.is_set():
                 raise Interrupted()
+
+            llm_started = time.perf_counter()
+
+
             stream = self.client.chat.completions.create(
                 model=config.MODEL,
                 max_tokens=200,  # backstop; the sentence limit does the real work
                 messages=[{"role": "system", "content": personality.SYSTEM_PROMPT}, *self.history],
-                tools=TOOLS if self.actions else openai.NOT_GIVEN,
+                tools=TOOLS if self.actions and not tool_used else openai.NOT_GIVEN,
                 stream=True,
             )
+
+            print("  [timing] LLM request started")
+
+
             buf = ""                 # text not yet released as a sentence
             raw: list[str] = []      # everything the model wrote this round
             tag_decided = False
             calls: dict[int, dict] = {}
             spoken = 0
+
+            first_chunk_seen = False
+
+
             try:
                 for chunk in stream:
+                    if not first_chunk_seen:
+                        print(f"  [timing] LLM first chunk: {time.perf_counter() - llm_started:.2f}s")
+                        first_chunk_seen = True
+
                     if cancelled.is_set():
                         raise Interrupted()
                     if not chunk.choices:
@@ -240,38 +273,81 @@ class RobotBrain:
                             continue
                         if on_emotion is not None:
                             on_emotion(self.emotion)
-                    parts = _SENTENCE_END.split(buf)
-                    while len(parts) > 1:  # everything but the last piece is a whole sentence
-                        s = parts.pop(0).strip()
-                        if s:
-                            spoken += 1
-                            yield s
-                        if spoken >= limit:
-                            break
-                    buf = parts[-1] if parts else ""
-                    if spoken >= limit:
-                        print(f"  (trimmed reply to {limit} sentences)")
-                        buf = ""
-                        break
+
+
+		    # After a tool has already run, tools are disabled for this
+                    # model call. Therefore this text cannot turn into another
+                    # tool call later, and complete sentences are safe to speak
+                    # immediately.
+                    if tool_used:
+                        parts = _SENTENCE_END.split(buf)
+                        while len(parts) > 1:
+                            s = parts.pop(0).strip()
+                            if s and spoken < limit:
+                                spoken += 1
+                                yield s
+                        buf = parts[-1] if parts else ""
             finally:
                 stream.close()
+                print(f"  [timing] LLM complete: {time.perf_counter() - llm_started:.2f}s")
 
-            if not tag_decided:
+            # First-pass responses were buffered because they might contain a
+            # tool call, so rebuild their complete text now. Post-tool responses
+            # were streamed above; keep buf as only the unspoken tail.
+            if not tool_used:
+                buf = "".join(raw)
                 buf, _ = self._take_emotion_tag(buf, final=True)
-                if on_emotion is not None and (buf.strip() or not calls):
+
+            # The first emotion tag controls the face. If the model changes its mind
+            # later and emits another emotion tag, do not speak that tag aloud.
+            for emotion in config.EMOTIONS:
+                buf = re.sub(
+                    rf"\[\s*{re.escape(emotion)}\s*\]",
+                    "",
+                    buf,
+                    flags=re.IGNORECASE,
+                )
+
+            # If there was no tool call, this is the final spoken response.
+            if not calls:
+                if on_emotion is not None:
                     on_emotion(self.emotion)
 
+                # Normal first-pass answers were buffered because a tool call
+                # could still have appeared. Post-tool answers were already
+                # streamed sentence by sentence above.
+                if not tool_used:
+                    parts = [p.strip() for p in _SENTENCE_END.split(buf) if p.strip()]
+                    if len(parts) > limit:
+                        print(f"  (trimmed reply to {limit} sentences)")
+                        parts = parts[:limit]
+
+                    for s in parts:
+                        yield s
+                else:
+                    tail = buf.strip()
+                    if tail and spoken < limit:
+                        spoken += 1
+                        yield tail
+
             if calls:
-                # He decided to do something: say any lead-in, run it, tell him what happened.
-                if buf.strip():
-                    yield buf.strip()
-                    buf = ""
+                # Tool-use turns are internal. Run the action first, give the
+                # result back to the model, then let the next turn speak.
+                tool_used = True
+
                 self.history.append({
+
                     "role": "assistant",
                     "content": "".join(raw),
                     "tool_calls": [
-                        {"id": c["id"], "type": "function",
-                         "function": {"name": c["name"], "arguments": c["arguments"]}}
+                        {
+                            "id": c["id"],
+                            "type": "function",
+                            "function": {
+                                "name": c["name"],
+                                "arguments": c["arguments"],
+                            },
+                        }
                         for _, c in sorted(calls.items())
                     ],
                 })
@@ -309,10 +385,7 @@ class RobotBrain:
                 continue
             if nudged and self.history and self.history[-1].get("role") == "user":
                 self.history.pop()  # don't keep the nudge in the transcript
-            tail = buf.strip()
-            if tail and spoken < limit:
-                yield tail
-            elif not spoken and not tail:
+            if not buf.strip():
                 self.emotion = "thinking"
                 if on_emotion is not None:
                     on_emotion(self.emotion)

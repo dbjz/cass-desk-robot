@@ -95,7 +95,7 @@ class Eyes:
         eyes = self
         page = (Path(__file__).with_name("liveview.html").read_text(encoding="utf-8")
                 .replace("{name}", config.ROBOT_NAME).encode())
-        local_hosts = ("localhost", "127.0.0.1", "::1", bind.lower())
+        local_hosts = ("localhost", "127.0.0.1", "::1", bind.lower(), "10.0.1.12", "cass-brain")
 
         class Handler(BaseHTTPRequestHandler):
             server_version = "desk-robot"  # don't advertise the Python version

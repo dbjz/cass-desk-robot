@@ -81,6 +81,7 @@ def _fish_stream(text: str) -> Iterator[bytes]:
         headers={
             "Authorization": f"Bearer {os.environ['FISH_AUDIO_API_KEY']}",
             "Content-Type": "application/json",
+	    "model": "s2.1-pro-free",
         },
     )
     # python.org builds of Python on macOS don't see the system root certs;

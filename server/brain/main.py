@@ -234,12 +234,15 @@ async def handle_console_line(line: str) -> bool:
     return True
 
 
-# ── Rocky's abilities (called by the brain, from its worker thread) ──────────
+# ── Cass's abilities (called by the brain, from its worker thread) ──────────
 
 async def look(args: dict) -> tuple[str, bytes | None]:
     """Move the head, wait for it to get there, and grab a fresh frame.
     Only the axis that was asked for moves: "left"/"right" pan, "down"/
     "level" tilt, "center" both."""
+    look_started = time.perf_counter()
+
+
     pan = tracker.pan if tracker else 0.0
     tilt = tracker.tilt if tracker else 0.0
     move_pan = move_tilt = False
@@ -271,13 +274,27 @@ async def look(args: dict) -> tuple[str, bytes | None]:
         await send_to_robot({"type": "tilt", "deg": tilt})
     if tracker is not None:
         tracker.note_pose(pan=pan if move_pan else None, tilt=tilt if move_tilt else None)
-    await asyncio.sleep(1.2)  # servo easing + a frame or two from the new angle
+
+
+    move_sent = time.perf_counter()
+    await asyncio.sleep(0.8)  # servo easing + a frame or two from the new angle
+    print(f"  [timing] look servo wait: {time.perf_counter() - move_sent:.2f}s")
+
+
+    frame_started = time.perf_counter()
     seq = eyes.frame_seq
     for _ in range(10):
         if eyes.frame_seq != seq:
             break
         await asyncio.sleep(0.1)
+
+
     jpeg = eyes.latest()
+
+
+    print(f"  [timing] look fresh frame: {time.perf_counter() - look_started:.2f}s")
+    print(f"  [timing] look total: {time.perf_counter() - look_started:2f}s")
+
     pan_word = "left" if pan < -5 else "right" if pan > 5 else "center"
     if tilt <= config.TRACK_TILT_MIN + 0.5:
         tilt_word = "down, as far as it goes"
@@ -326,7 +343,7 @@ ABILITIES = {
 
 
 def wants_camera(question: str) -> bool:
-    """Does the question sound like it's about what Rocky can see?"""
+    """Does the question sound like it's about what Cass can see?"""
     q = " " + normalize(question) + " "
     return any(f" {w} " in q or (" " in w and w in q) for w in config.CAMERA_WORDS)
 
@@ -437,7 +454,7 @@ class SpokenReply:
     async def play(self, interruptible: bool = True) -> bool:
         """Send the audio to the speaker as it arrives. Until the first audio
         is ready the human can cancel the whole reply by talking again;
-        returns False in that case. Once Rocky is speaking the mic is muted
+        returns False in that case. Once Cass is speaking the mic is muted
         (his voice would trigger it) and he finishes what he's saying."""
         get = asyncio.ensure_future(self._next())
         while not get.done():
@@ -514,7 +531,7 @@ class SpokenReply:
 
 async def converse(question: str, ended_at: float | None = None, heard_at: float | None = None) -> bool:
     """Ask the brain, show the face, and speak the answer as it forms.
-    Returns False if the human started talking again before Rocky spoke
+    Returns False if the human started talking again before Cass spoke
     (the reply was dropped and the question is still open)."""
     global awake_until
     loop = asyncio.get_running_loop()
@@ -539,7 +556,7 @@ async def converse(question: str, ended_at: float | None = None, heard_at: float
     finally:
         thinking = False
     if not finished:
-        print("  (you kept talking — Rocky will hear the rest and answer once)")
+        print(f"  (you kept talking - {config.ROBOT_NAME} will hear the rest and answer once)")
         await send_to_robot({"type": "emotion", "name": "neutral"})
         return False
     if reply.text:
@@ -553,7 +570,7 @@ async def converse(question: str, ended_at: float | None = None, heard_at: float
 
 async def say(text: str) -> bytes:
     """Speak a fixed line: through the robot's speaker when it's connected,
-    else the Mac. Ears are muted meanwhile so Rocky doesn't hear himself."""
+    else the Mac. Ears are muted meanwhile so Cass doesn't hear himself."""
     reply = SpokenReply(asyncio.get_running_loop(), Timeline(time.time()))
     reply.speak_fixed(text)
     try:
@@ -786,11 +803,23 @@ async def head_loop() -> None:
 
 async def doze_loop() -> None:
     """When the awake clock runs out, he nods off on his own (sleepy face,
-    no announcement). Saying "hey Rocky" wakes him again."""
+    no announcement). Do not sleep while thinking or speaking."""
     was_awake = False
+
+
     while True:
         await asyncio.sleep(1)
-        awake = time.time() < awake_until
+
+        # Cass is busy if he is thinking or currently speaking.
+        speaking = ears is not None and ears.muted.is_set()
+        busy = thinking or speaking
+
+        # Being busy counts as being awake even if the normal awake timer
+        # happens to expire during a Long response
+
+
+        awake = busy or time.time() < awake_until
+
         if was_awake and not awake:
             print(f"({config.ROBOT_NAME} dozed off — say \"hey {config.ROBOT_NAME}\" to wake him)")
             await send_to_robot({"type": "asleep", "on": True})
