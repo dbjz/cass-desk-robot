@@ -958,7 +958,10 @@ async def main() -> None:
         if config.LISTEN_ON_START:
             await start_listening()
         try:
-            await console_loop()
+            if sys.stdin.isatty():
+                await console_loop()
+            else:
+                await asyncio.Future()
         finally:
             voice_task.cancel()
             doze_task.cancel()
